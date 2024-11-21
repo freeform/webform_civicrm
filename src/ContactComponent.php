@@ -13,6 +13,11 @@ use Drupal\Component\Utility\Xss;
  */
 class ContactComponent implements ContactComponentInterface {
 
+  /**
+   * UtilsInterface object
+   */
+  protected $utils;
+
   public function __construct(UtilsInterface $utils) {
     $this->utils = $utils;
   }
@@ -102,6 +107,7 @@ class ContactComponent implements ContactComponentInterface {
       'country' => ['address', 'country_id:label'],
       'county' => ['address', 'county_id:label'],
       'postal_code' => ['address', 'postal_code'],
+      'street_address' => ['address', 'street_address']
     ];
     $joinedTables = [];
     foreach ($fieldMappings as $field => $type) {
@@ -216,19 +222,10 @@ class ContactComponent implements ContactComponentInterface {
     if ($cid == $this->utils->wf_crm_user_cid()) {
       $filters['checkPermissions'] = FALSE;
     }
-    if (!empty($filters['checkPermissions'])) {
-      // If we have a valid checksum for this contact, bypass other permission checks
-      // For legacy reasons we support "cid" param as an alias of "cid1"
-      // ToDo use: \Drupal::request()->query->all();
-      if (wf_crm_aval($_GET, "cid$c") == $cid || ($c == 1 && wf_crm_aval($_GET, "cid") == $cid)) {
-        // For legacy reasons we support "cs" param as an alias of "cs1"
-        if (!empty($_GET['cs']) && $c == 1 && \CRM_Contact_BAO_Contact_Utils::validChecksum($cid, $_GET['cs'])) {
-          $filters['checkPermissions'] = FALSE;
-        }
-        elseif (!empty($_GET["cs$c"]) && \CRM_Contact_BAO_Contact_Utils::validChecksum($cid, $_GET["cs$c"])) {
-          $filters['checkPermissions'] = FALSE;
-        }
-      }
+    // If checksum is included in the URL, bypass the permission.
+    $checksumValid = $this->utils->checksumUserAccess($c, $cid);
+    if (!empty($filters['checkPermissions']) && $checksumValid) {
+      $filters['checkPermissions'] = FALSE;
     }
     // Fetch contact name with filters applied
     $result = $this->utils->wf_civicrm_api4('Contact', 'get', $filters)[0] ?? [];
@@ -281,13 +278,13 @@ class ContactComponent implements ContactComponentInterface {
         // Put current employer first in the list
         if ($type == $employer_type && $current) {
           $search_key = $a == 'b' ? 'id' : 'employer_id';
-          // Note: inconsistency in api3 - search key is "employer_id" but return key is "current_employer_id"
-          $employer = $this->utils->wf_crm_apivalues('contact', 'get', [
-            $search_key => $cid,
-            'sequential' => 1,
-          ], $a == 'b' ? 'current_employer_id' : 'id');
+          $employer = $this->utils->wf_civicrm_api4('Contact', 'get', [
+            'where' => [
+              [$search_key, '=', $cid],
+            ],
+          ])->first()[$a == 'b' ? 'employer_id' : 'id'] ?? NULL;
           if ($employer) {
-            $found[$employer[0]] = $employer[0];
+            $found[$employer] = $employer;
           }
         }
         $type_ids[] = $type;

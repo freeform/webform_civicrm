@@ -8,9 +8,27 @@ namespace Drupal\webform_civicrm;
  */
 use Drupal\Component\Utility\Html;
 use Drupal\Core\Render\Markup;
+use Symfony\Component\HttpFoundation\RequestStack;
 use Drupal\webform\WebformInterface;
 
 class Utils implements UtilsInterface {
+
+  /**
+   * The related request stack.
+   *
+   * @var \Symfony\Component\HttpFoundation\RequestStack
+   */
+  private $requestStack;
+
+  /**
+   * Constructs a utils object.
+   *
+   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
+   *   The request stack.
+   */
+  function __construct(RequestStack $requestStack) {
+    $this->requestStack = $requestStack;
+  }
 
   /**
    * Explodes form key into an array and verifies that it is in the right format
@@ -113,11 +131,15 @@ class Utils implements UtilsInterface {
    * @return array
    */
   function wf_crm_get_events($reg_options, $context) {
-    $ret = [];
+    static $ret = [];
+    if ($ret && $context !== 'config_form') {
+      return $ret;
+    }
     $format = wf_crm_aval($reg_options, 'title_display', 'title');
     $sort_field = wf_crm_aval($reg_options, 'event_sort_field', 'start_date');
     $sort_order = ($context == 'config_form' && $sort_field === 'start_date') ? ' DESC' : '';
     $params = [
+      'return' => ['id', 'title', 'start_date', 'end_date', 'event_type_id', 'max_participants'],
       'is_template' => 0,
       'is_active' => 1,
     ];
@@ -226,14 +248,15 @@ class Utils implements UtilsInterface {
       'parent_id' => $parent_id ?: ['IS NULL' => 1],
       'options' => ['sort' => 'name'],
     ];
-    $tags = $this->wf_crm_apivalues('Tag', 'get', $params, 'name');
+    $tag_display_field = $this->tag_display_field();
+    $tags = $this->wf_crm_apivalues('Tag', 'get', $params, $tag_display_field);
     // Tagsets cannot be nested so no need to fetch children
     if ($parent_id || !$tags) {
       return $tags;
     }
     // Fetch child tags
     unset($params['parent_id']);
-    $params += ['return' => ['name', 'parent_id'], 'parent_id.is_tagset' => 0, 'parent_id.is_selectable' => 1, 'parent_id.used_for' => $params['used_for']];
+    $params += ['return' => [$tag_display_field, 'parent_id'], 'parent_id.is_tagset' => 0, 'parent_id.is_selectable' => 1, 'parent_id.used_for' => $params['used_for']];
     $unsorted = $this->wf_crm_apivalues('Tag', 'get', $params);
     $parents = array_fill_keys(array_keys($tags), ['depth' => 1]);
     // Place children under their parents.
@@ -244,7 +267,7 @@ class Utils implements UtilsInterface {
       foreach ($unsorted as $id => $tag) {
         $parent = $tag['parent_id'];
         if (isset($parents[$parent])) {
-          $name = str_repeat('- ', $parents[$parent]['depth']) . $tag['name'];
+          $name = str_repeat('- ', $parents[$parent]['depth']) . $tag[$tag_display_field];
           $pos = array_search($parents[$parent]['child'] ?? $parent, array_keys($tags)) + 1;
           $tags = array_slice($tags, 0, $pos, TRUE) + [$id => $name] + array_slice($tags, $pos, NULL, TRUE);
           $parents[$id] = ['depth' => $parents[$parent]['depth'] + 1];
@@ -603,27 +626,13 @@ class Utils implements UtilsInterface {
   }
 
   /**
-   * Wrapper for all CiviCRM APIv4 calls
-   *
-   * @param string $entity
-   *   API entity
-   * @param string $operation
-   *   API operation
-   * @param array $params
-   *   API params
-   * @param string|int|array $index
-   *   Controls the Result array format.
-   *
-   * @return array
-   *   Result of API call
+   * @inheritDoc
    */
   function wf_civicrm_api4($entity, $operation, $params, $index = NULL) {
     if (!$entity) {
       return [];
     }
-    $params += [
-      'checkPermissions' => FALSE,
-    ];
+    $params['checkPermissions'] = FALSE;
     $result = civicrm_api4($entity, $operation, $params, $index);
     return $result;
   }
@@ -647,9 +656,7 @@ class Utils implements UtilsInterface {
       return [];
     }
 
-    $params += [
-      'check_permissions' => FALSE,
-    ];
+    $params['check_permissions'] = FALSE;
     if ($operation == 'transact') {
       $utils = \Drupal::service('webform_civicrm.utils');
       $result = $utils->wf_civicrm_api3_contribution_transact($params);
@@ -1019,6 +1026,92 @@ class Utils implements UtilsInterface {
       return TRUE;
     }
     return FALSE;
+  }
+
+  /**
+   * @inheritDoc
+   */
+  public function checksumUserAccess($c, $cid) {
+    $request = $this->requestStack->getCurrentRequest();
+    $urlCidN = $urlChecksumN = NULL;
+    $session = \CRM_Core_Session::singleton();
+    $urlCid1 = $request->query->get('cid');
+    $urlChecksum1 = $request->query->get('cs');
+
+    $urlCidN = $request->query->get("cid$c");
+    $urlChecksumN = $request->query->get("cs$c");
+
+    $cs = NULL;
+    if ($c == 1 && !empty($urlChecksum1)) {
+      $cs = $urlChecksum1;
+    }
+    elseif (!empty($urlChecksumN)) {
+      $cs = $urlChecksumN;
+    }
+    if ($cs && (($c == 1 && $urlCid1 == $cid) || $urlCidN == $cid)) {
+      $check_access = $this->wf_civicrm_api4('Contact', 'validateChecksum', [
+        'contactId' => $cid,
+        'checksum' => $cs,
+      ])[0] ?? [];
+      if ($check_access['valid']) {
+        if ($c == 1) {
+          $session->set('userID', $cid);
+        }
+        return TRUE;
+      }
+    }
+    // If access is checked for non primary contact, check if c1 has access to view it.
+    elseif ($c != 1 && $this->isContactAccessible($cid)) {
+      return TRUE;
+    }
+    // If no checksum is passed and user is anonymous, reset prev checksum session values if any.
+    if (\Drupal::currentUser()->isAnonymous() && $session->get('userID') && $c == 1 && empty($urlChecksum1)) {
+      $session->reset();
+    }
+    return FALSE;
+  }
+
+  /**
+   * @inheritDoc
+   */
+  public function isContactAccessible($cid) {
+    $access = $this->wf_civicrm_api4('Contact', 'checkAccess', [
+      'action' => 'get',
+      'values' => [
+        'id' => $cid,
+      ],
+    ], 0);
+    if (!empty($access['access'])) {
+      return TRUE;
+    }
+
+    $request = $this->requestStack->getCurrentRequest();
+    $urlCid1 = $request->query->get('cid') ?? $request->query->get('cid1') ?? NULL;
+    $urlChecksum1 = $request->query->get('cs') ?? $request->query->get('cs1') ?? NULL;
+
+    if (!empty($urlChecksum1) && !empty($urlCid1)) {
+      $valid = $this->wf_civicrm_api4('Contact', 'validateChecksum', [
+        'contactId' => $urlCid1,
+        'checksum' => $urlChecksum1,
+      ])[0] ?? [];
+      if ($valid['valid']) {
+        // checkAccess v4 api does not check for access via relationship.
+        if (\CRM_Contact_BAO_Contact_Permission::allow($cid)) {
+          return TRUE;
+        }
+      }
+    }
+    return FALSE;
+  }
+  
+  /**
+   * @return string Which field is the tag display field in this version of civi?
+   */
+  public function tag_display_field(): string {
+    if (version_compare(\CRM_Core_BAO_Domain::version(), '5.68.alpha1', '>=')) {
+      return 'label';
+    }
+    return 'name';
   }
 
 }

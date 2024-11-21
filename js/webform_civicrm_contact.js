@@ -14,17 +14,22 @@
             hintText: field.data('search-prompt'),
             noResultsText: field.data('none-prompt'),
             resultsFormatter: formatChoices,
-            searchingText: "Searching..."
+            searchingText: "Searching...",
+            enableHTML: true
           };
-          wfCivi.existingInit(
-            field,
-            field.data('civicrm-contact'),
-            field.data('form-id'),
-            autocompleteUrl,
-            toHide,
-            tokenValues
-          );
         }
+        else {
+          var tokenValues = false;
+        }
+        
+        wfCivi.existingInit(
+          field,
+          field.data('civicrm-contact'),
+          field.data('form-id'),
+          autocompleteUrl,
+          toHide,
+          tokenValues
+        );
 
         field.change(function () {
           wfCivi.existingSelect(

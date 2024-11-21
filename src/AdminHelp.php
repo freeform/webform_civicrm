@@ -15,6 +15,11 @@ use Drupal\Core\Url;
  */
 class AdminHelp implements AdminHelpInterface {
 
+  /**
+   * @var \Drupal\webform_civicrm\UtilsInterface
+   */
+  protected $utils;
+
   public function __construct(UtilsInterface $utils) {
     $this->utils = $utils;
   }
@@ -267,6 +272,15 @@ class AdminHelp implements AdminHelpInterface {
       t('Example for "Register separately":') .
       '<br /><code>' . Url::fromUri("internal:/node", ['absolute' => TRUE])->toString() .
       '/{node.nid}?c1event1={event1.event_id},{event2.event_id}&amp;c2event1={event3.event_id}</code></p>';
+  }
+
+  /**
+   * Help text for disable primary setting.
+   */
+  protected function reg_options_disable_primary_participant() {
+    return '<p>' .
+      t('If enabled, Contact 1 will not be stored as primary participant for multiple registrations.') .
+      '</p>';
   }
 
   protected function reg_options_show_past_events() {

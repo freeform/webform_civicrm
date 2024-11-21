@@ -11,6 +11,27 @@ use Drupal\Core\Url;
  */
 final class MultiCustomFieldsSubmissionTest extends WebformCivicrmTestBase {
 
+  /**
+   * @var int
+   */
+  private $_totalMV;
+
+  /**
+   * @var array
+   */
+  private $_customFields;
+
+  /**
+   * @var int
+   */
+  private $_cgID;
+
+  /**
+   * @var array
+   */
+  private $_contact1;
+  private $_contact2;
+
   private function createMultiValueCustomFields() {
     $this->_customFields = [];
     $params = [
@@ -195,7 +216,6 @@ final class MultiCustomFieldsSubmissionTest extends WebformCivicrmTestBase {
     $this->enableCivicrmOnWebform();
 
     $this->getSession()->getPage()->selectFieldOption("number_of_contacts", $this->_totalMV);
-    $this->assertSession()->assertWaitOnAjaxRequest();
     $this->htmlOutput();
 
     $this->enableCustomFields(1);
@@ -257,7 +277,6 @@ final class MultiCustomFieldsSubmissionTest extends WebformCivicrmTestBase {
     $this->enableCivicrmOnWebform();
 
     $this->getSession()->getPage()->selectFieldOption("number_of_contacts", $this->_totalMV);
-    $this->assertSession()->assertWaitOnAjaxRequest();
     $this->htmlOutput();
 
     $this->enableCustomFields(1);

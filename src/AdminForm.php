@@ -31,6 +31,11 @@ class AdminForm implements AdminFormInterface {
   private $data;
 
   /**
+   * @var \Drupal\webform_civicrm\UtilsInterface
+   */
+  protected $utils;
+
+  /**
    * The shim allowing us to slowly port this code.
    *
    * @var \Drupal\webform\WebformInterface
@@ -40,6 +45,11 @@ class AdminForm implements AdminFormInterface {
    * @var array
    */
   public static $fieldset_entities = ['contact', 'billing_1_number_of_billing', 'activity', 'case', 'grant'];
+
+  /**
+   * @var bool
+   */
+  public $confirmPage;
 
   public function __construct(UtilsInterface $utils) {
     $this->utils = $utils;
@@ -233,7 +243,7 @@ class AdminForm implements AdminFormInterface {
       '#type' => 'select',
       '#title' => t('Number of Contacts'),
       '#default_value' => count($this->data['contact']),
-      '#options' => array_combine(range(1, 40), range(1, 40)),
+      '#options' => array_combine(range(1, 50), range(1, 50)),
     ];
     $this->form['change_form_settings'] = [
       '#type' => 'button',
@@ -525,6 +535,7 @@ class AdminForm implements AdminFormInterface {
           'entire_result' => t('Include <em>entire</em> webform submission in activity details'),
           'view_link' => t('Include link to <em>view</em> webform submission in activity details'),
           'edit_link' => t('Include link to <em>edit</em> webform submission in activity details'),
+          'view_link_secure' => t('Include secure (tokenised) link to <em>view</em> webform submission in activity details'),
           'update_existing' => t('Update the details when an existing activity is updated'),
         ],
         '#default_value' => wf_crm_aval($this->data, "activity:$n:details", ['view_link'], TRUE),
@@ -938,9 +949,15 @@ class AdminForm implements AdminFormInterface {
       '#title' => t('Allow events to be autoloaded from URL'),
       '#default_value' => (bool) wf_crm_aval($this->data, 'reg_options:allow_url_load'),
     ];
+    $this->form['participant']['reg_options']['disable_primary_participant'] = [
+      '#type' => 'checkbox',
+      '#title' => t('Disable Contact 1 to be stored as Primary Participant'),
+      '#default_value' => (bool) wf_crm_aval($this->data, 'reg_options:disable_primary_participant'),
+    ];
     $this->help($this->form['participant']['reg_options']['block_form'], 'reg_options_block_form');
     $this->help($this->form['participant']['reg_options']['disable_unregister'], 'reg_options_disable_unregister');
     $this->help($this->form['participant']['reg_options']['allow_url_load'], 'reg_options_allow_url_load');
+    $this->help($this->form['participant']['reg_options']['disable_primary_participant'], 'reg_options_disable_primary_participant');
     $this->addAjaxItem('participant', 'participant_reg_type', 'participants');
     $this->addAjaxItem('participant', 'event_type', 'participants');
     $this->addAjaxItem('participant', 'show_past_events', 'participants');
@@ -1121,6 +1138,13 @@ class AdminForm implements AdminFormInterface {
         }
         if (isset($set['fields'])) {
           foreach ($set['fields'] as $fid => $field) {
+            // Display receive date only if processor = 'Pay Later' or '- User Select -'
+            if ($fid == 'contribution_receive_date') {
+              $pp = wf_crm_aval($this->data, "contribution:1:contribution:1:payment_processor_id", 'create_civicrm_webform_element', TRUE);
+              if (!empty($pp) && $pp !== 'create_civicrm_webform_element') {
+                continue;
+              }
+            }
             $fid = "civicrm_1_contribution_1_$fid";
             if (strpos($sid, 'cg') === 0) {
               $this->form['contribution']['sets']['custom'][$sid][$fid] = $this->addItem($fid, $field);
@@ -1133,12 +1157,13 @@ class AdminForm implements AdminFormInterface {
       }
     }
     $this->addAjaxItem("contribution:sets:contribution", "civicrm_1_contribution_1_contribution_financial_type_id", "..:custom");
+    $this->addAjaxItem("contribution:sets:contribution", "civicrm_1_contribution_1_contribution_payment_processor_id", "..:contribution");
 
     //Add Currency.
     $this->form['contribution']['sets']['contribution']['contribution_1_settings_currency'] = [
       '#type' => 'select',
       '#title' => t('Currency'),
-      '#default_value' => wf_crm_aval($this->data, "contribution:1:currency"),
+      '#default_value' => wf_crm_aval($this->data, "contribution:1:currency", $this->utils->wf_crm_get_civi_setting('defaultCurrency')),
       '#options' => \CRM_Core_OptionGroup::values('currencies_enabled'),
       '#required' => TRUE,
     ];
@@ -1548,6 +1573,9 @@ class AdminForm implements AdminFormInterface {
       if ($field['type'] != 'hidden') {
         $options += ['create_civicrm_webform_element' => t('- User Select -')];
       }
+      if ($name == 'group') {
+        $options += ['public_groups' => t('- User Select - (public groups)')];
+      }
       $options += $this->utils->wf_crm_field_options($field, 'config_form', $this->data);
       $item += [
         '#type' => 'select',
@@ -1918,7 +1946,9 @@ class AdminForm implements AdminFormInterface {
         }
         elseif (!isset($enabled[$key])) {
           $val = (array) $val;
-          if (in_array('create_civicrm_webform_element', $val, TRUE) || (!empty($val[0]) && $field['type'] == 'hidden')) {
+          if (in_array('create_civicrm_webform_element', $val, TRUE)
+          || (!empty($val[0]) && $field['type'] == 'hidden')
+          || (preg_match('/_group$/', $key) && in_array('public_groups', $val, TRUE))) {
             // Restore disabled component
             if (isset($disabled[$key])) {
               webform_component_update($disabled[$key]);
@@ -1951,9 +1981,9 @@ class AdminForm implements AdminFormInterface {
                 $created[] = $field['name'];
               }
               // @todo: Update Conditionals as per Drupal 9 standards.
-              // if (isset($field['civicrm_condition'])) {
-              //   $this->addConditionalRule($field, $enabled);
-              // }
+              if (isset($field['civicrm_condition'])) {
+                $this->addConditionalRule($field, $enabled);
+              }
             }
           }
         }
@@ -2164,7 +2194,7 @@ class AdminForm implements AdminFormInterface {
           if (isset($options[$value])) {
             $field['states'] = [
               'visible' => [
-                ":input[name='{$source_id}']" => ['value' => $value],
+                ':input[name="' . $source_key . '"]' => ['value' => $value],
               ],
             ];
             unset($field['civicrm_condition']);
@@ -2194,7 +2224,7 @@ class AdminForm implements AdminFormInterface {
     // Find fields to delete
     foreach ($fields as $key => $val) {
       $val = (array) wf_crm_aval($this->settings, $key);
-      if (((in_array('create_civicrm_webform_element', $val, TRUE)) && $this->settings['nid'])
+      if (((in_array('create_civicrm_webform_element', $val, TRUE) || in_array('public_groups', $val, TRUE)) && $this->settings['nid'])
         || strpos($key, 'fieldset') !== FALSE) {
         unset($fields[$key]);
       }

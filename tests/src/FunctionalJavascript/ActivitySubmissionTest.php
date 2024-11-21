@@ -12,6 +12,11 @@ use Drupal\Core\Url;
 final class ActivitySubmissionTest extends WebformCivicrmTestBase {
 
   /**
+   * @var array
+   */
+  private $_contacts;
+
+  /**
    * {@inheritdoc}
    */
   protected function setUp(): void {
@@ -81,12 +86,11 @@ final class ActivitySubmissionTest extends WebformCivicrmTestBase {
     $this->enableCivicrmOnWebform();
 
     $this->getSession()->getPage()->selectFieldOption('number_of_contacts', $num);
-    $this->assertSession()->assertWaitOnAjaxRequest();
     $this->htmlOutput();
 
     $this->getSession()->getPage()->clickLink('Activities');
     $this->getSession()->getPage()->selectFieldOption('activity_number_of_activity', 1);
-    $this->assertSession()->assertWaitOnAjaxRequest();
+    $this->assertSession()->waitForField('civicrm_1_activity_1_activity_subject');
     $this->htmlOutput();
 
     if ($select_activity) {

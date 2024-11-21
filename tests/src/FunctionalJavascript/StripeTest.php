@@ -10,22 +10,16 @@ use Drupal\Core\Url;
  * @group webform_civicrm
  */
 final class StripeTest extends WebformCivicrmTestBase {
-
+  protected $failOnJavascriptConsoleErrors = TRUE;
   /**
    * {@inheritdoc}
    */
   protected function setUp(): void {
     parent::setUp();
 
-    $this->setUpExtension('mjwshared,firewall,com.drastikbydesign.stripe');
+    $this->setUpExtension('mjwshared,firewall,mjwpaymentapi,com.drastikbydesign.stripe');
 
-    $params = [];
-    $result = $this->utils->wf_civicrm_api('Stripe', 'setuptest', $params);
-    $this->paymentProcessorID = $result['id'];
-    $this->utils->wf_civicrm_api('PaymentProcessor', 'create', [
-      'id' => $this->paymentProcessorID,
-      'is_test' => 0,
-    ]);
+    $this->paymentProcessorID = $this->createStripeProcessor();
 
     $this->utils->wf_civicrm_api('Setting', 'create', [
       'stripe_nobillingaddress' => 1,
@@ -44,6 +38,8 @@ final class StripeTest extends WebformCivicrmTestBase {
     ]));
     $this->setUpSettings();
 
+    $this->drupalLogout();
+    
     $this->drupalGet($this->webform->toUrl('canonical'));
     $this->assertPageNoErrorMessages();
     $edit = [
@@ -59,12 +55,10 @@ final class StripeTest extends WebformCivicrmTestBase {
     $this->assertSession()->elementExists('css', '#wf-crm-billing-items');
     $this->htmlOutput();
     $this->assertSession()->elementTextContains('css', '#wf-crm-billing-total', '59.50');
-    $this->assertSession()->assertWaitOnAjaxRequest();
 
     $this->fillStripeCardWidget();
 
     $this->getSession()->getPage()->pressButton('Submit');
-    $this->assertSession()->assertWaitOnAjaxRequest();
     $this->assertPageNoErrorMessages();
     $this->htmlOutput();
 
@@ -79,6 +73,9 @@ final class StripeTest extends WebformCivicrmTestBase {
    * Test webform submission using stripe processor with AJAX enabled.
    */
   public function testAjaxSubmitContribution() {
+    // Stripe payment logs a console ajax error.
+    $this->failOnJavascriptConsoleErrors = FALSE;
+
     $this->drupalLogin($this->adminUser);
     $this->drupalGet(Url::fromRoute('entity.webform.civicrm', [
       'webform' => $this->webform->id(),
@@ -103,12 +100,10 @@ final class StripeTest extends WebformCivicrmTestBase {
     $this->assertSession()->elementExists('css', '#wf-crm-billing-items');
     $this->htmlOutput();
     $this->assertSession()->elementTextContains('css', '#wf-crm-billing-total', '59.50');
-    $this->assertSession()->assertWaitOnAjaxRequest();
 
     $this->fillStripeCardWidget();
 
     $this->getSession()->getPage()->pressButton('Submit');
-    $this->assertSession()->assertWaitOnAjaxRequest();
     $this->assertPageNoErrorMessages();
     $this->htmlOutput();
 
@@ -128,17 +123,13 @@ final class StripeTest extends WebformCivicrmTestBase {
     $stripeCardElement = $this->assertSession()->waitForElementVisible('xpath', '//div[contains(@class, "StripeElement")]/div/iframe');
     $this->assertNotEmpty($stripeCardElement);
     $this->getSession()->switchToIFrame($stripeCardElement->getAttribute('name'));
-    $this->assertSession()->assertWaitOnAjaxRequest();
+    $this->getSession()->wait(3000);
 
     $this->assertSession()->waitForElementVisible('css', 'input[name="cardnumber"]');
     $this->getSession()->getPage()->fillField('cardnumber', '4111 1111 1111 1111');
-    $this->assertSession()->assertWaitOnAjaxRequest();
     $this->getSession()->getPage()->fillField('exp-date', '11 / ' . $expYear);
-    $this->assertSession()->assertWaitOnAjaxRequest();
     $this->getSession()->getPage()->fillField('cvc', '123');
-    $this->assertSession()->assertWaitOnAjaxRequest();
     $this->getSession()->getPage()->fillField('postal', '12345');
-    $this->assertSession()->assertWaitOnAjaxRequest();
 
     $this->getSession()->switchToIFrame();
   }
@@ -221,6 +212,31 @@ final class StripeTest extends WebformCivicrmTestBase {
     $this->getSession()->getPage()->selectFieldOption('civicrm_1_lineitem_2_contribution_financial_type_id', 2);
 
     $this->saveCiviCRMSettings();
+  }
+
+  private function createStripeProcessor(): int {
+    $params = [
+      'name' => 'Stripe',
+      'domain_id' => \CRM_Core_Config::domainID(),
+      'payment_processor_type_id' => 'Stripe',
+      'title' => 'Stripe',
+      'is_active' => 1,
+      'is_default' => 0,
+      'is_test' => 0,
+      'is_recur' => 1,
+      'user_name' => \CRM_Utils_Constant::value('STRIPE_PK_TEST', 'pk_test_PNlMrGPvqOxwLK6Y3A9B2EFn'),
+      'password' => \CRM_Utils_Constant::value('STRIPE_SK_TEST', 'sk_test_WHbZbmFH97YpY2y4OpVfry9W'),
+      'url_site' => 'https://api.stripe.com/v1',
+      'url_recur' => 'https://api.stripe.com/v1',
+      'class_name' => 'Payment_Stripe',
+      'billing_mode' => 1
+    ];
+    // First see if it already exists.
+    $result = $this->utils->wf_civicrm_api('PaymentProcessor', 'get', $params);
+    if ($result['count'] != 1) {
+      $result = $this->utils->wf_civicrm_api('PaymentProcessor', 'create', $params);
+    }
+    return $result['id'];
   }
 
 }

@@ -3,7 +3,6 @@
 namespace Drupal\Tests\webform_civicrm\FunctionalJavascript;
 
 use Drupal\Core\Url;
-use Drupal\FunctionalJavascriptTests\DrupalSelenium2Driver;
 
 /**
  * Tests submitting a Webform with CiviCRM: Contact with Event.
@@ -11,6 +10,25 @@ use Drupal\FunctionalJavascriptTests\DrupalSelenium2Driver;
  * @group webform_civicrm
  */
 final class EventTest extends WebformCivicrmTestBase {
+
+  private $_customFields = [];
+
+  /**
+   * @var array
+   * custom group
+   */
+  private $cg;
+
+  /**
+   * @var array
+   * financial type
+   */
+  private $ft;
+
+  /**
+   * @var array
+   */
+  private $_event;
 
   protected function setUp(): void {
     parent::setUp();
@@ -75,7 +93,6 @@ final class EventTest extends WebformCivicrmTestBase {
     ]));
     $this->enableCivicrmOnWebform();
     $this->getSession()->getPage()->selectFieldOption('Number of Contacts', 2);
-    $this->assertSession()->assertWaitOnAjaxRequest();
 
     //Configure Event tab.
     $this->getSession()->getPage()->clickLink('Event Registration');
@@ -94,7 +111,6 @@ final class EventTest extends WebformCivicrmTestBase {
     $this->getSession()->getPage()->selectFieldOption('Payment Processor', 'Pay Later');
 
     $this->saveCiviCRMSettings();
-    $this->assertSession()->assertWaitOnAjaxRequest();
 
     $this->drupalGet($this->webform->toUrl('canonical'));
     $this->htmlOutput();
@@ -115,7 +131,6 @@ final class EventTest extends WebformCivicrmTestBase {
     $refName = 'civicrm_1_participant_1_cg' . $this->cg['id'] . '_custom_' . $this->_customFields['participant_contact_ref']['id'];
     $this->getSession()->getPage()->selectFieldOption($refName, 2);
     $this->getSession()->getPage()->pressButton('Next >');
-    $this->assertSession()->assertWaitOnAjaxRequest();
     $this->assertPageNoErrorMessages();
     $this->htmlOutput();
 
@@ -124,7 +139,6 @@ final class EventTest extends WebformCivicrmTestBase {
     $this->assertSession()->elementTextContains('css', '#wf-crm-billing-total', '40.00');
 
     $this->getSession()->getPage()->pressButton('Submit');
-    $this->assertSession()->assertWaitOnAjaxRequest();
     $this->assertPageNoErrorMessages();
     $this->htmlOutput();
 
@@ -138,6 +152,98 @@ final class EventTest extends WebformCivicrmTestBase {
     $customKey = 'custom_' . $this->_customFields['participant_contact_ref']['id'];
     $this->assertEquals('Smith, Mark', $participant[$customKey]);
     $this->assertEquals($contactRef['id'], $participant["{$customKey}_id"]);
+  }
+
+  /**
+   * Submit the form with values.
+   */
+  function submitWebform() {
+    $this->drupalGet($this->webform->toUrl('canonical'));
+    $this->assertPageNoErrorMessages();
+    $edit = [
+      'civicrm_1_contact_1_contact_first_name' => 'Frederick',
+      'civicrm_1_contact_1_contact_last_name' => 'Pabst',
+      'civicrm_2_contact_1_contact_first_name' => 'Mark',
+      'civicrm_2_contact_1_contact_last_name' => 'Anthony'
+    ];
+    $this->postSubmission($this->webform, $edit);
+  }
+
+  /**
+   * Verify submission results.
+   *
+   * @param boolean $primary
+   *   false if primary participant setting is disabled on the webform.
+   */
+  function verifyResults($primary = true) {
+    // Ensure both contacts are added to the event.
+    $api_result = $this->utils->wf_civicrm_api('participant', 'get', [
+      'sequential' => 1,
+    ]);
+    $this->assertEquals(0, $api_result['is_error']);
+    $this->assertEquals(2, $api_result['count']);
+
+    $values = $api_result['values'];
+    $this->assertEquals($this->_event['id'], $values[0]['event_id']);
+    $this->assertEquals($this->_event['id'], $values[1]['event_id']);
+    if ($primary) {
+      $this->assertEquals($values[0]['id'], $values[1]['participant_registered_by_id']);
+    }
+    else {
+      $this->assertEmpty($values[0]['participant_registered_by_id']);
+      $this->assertEmpty($values[1]['participant_registered_by_id']);
+    }
+    // Delete participants.
+    $this->utils->wf_civicrm_api('participant', 'delete', [
+      'id' => $values[0]['id'],
+    ]);
+    $this->utils->wf_civicrm_api('participant', 'delete', [
+      'id' => $values[1]['id'],
+    ]);
+  }
+
+  /**
+   * Verify the submission of multiple participants.
+   */
+  function testMultipleParticipants() {
+    $this->drupalLogin($this->adminUser);
+    $this->drupalGet(Url::fromRoute('entity.webform.civicrm', [
+      'webform' => $this->webform->id(),
+    ]));
+    $this->enableCivicrmOnWebform();
+
+    $this->getSession()->getPage()->selectFieldOption('number_of_contacts', 2);
+    $this->htmlOutput();
+
+    $this->getSession()->getPage()->clickLink('Event Registration');
+
+    // Configure Event tab.
+    $this->getSession()->getPage()->selectFieldOption('participant_reg_type', 'all');
+    $this->assertSession()->assertWaitOnAjaxRequest();
+    $this->htmlOutput();
+    $this->getSession()->getPage()->selectFieldOption('participant_1_number_of_participant', 1);
+    $this->assertSession()->assertWaitOnAjaxRequest();
+    $this->htmlOutput();
+    $this->getSession()->getPage()->selectFieldOption('civicrm_1_participant_1_participant_event_id[]', 'Test Event');
+
+    $this->saveCiviCRMSettings();
+
+    $this->submitWebform();
+
+    // Ensure both contacts are added to the event.
+    $this->verifyResults();
+
+    // Disable primary participant on the webform.
+    $this->drupalGet(Url::fromRoute('entity.webform.civicrm', [
+      'webform' => $this->webform->id(),
+    ]));
+    $this->getSession()->getPage()->clickLink('Event Registration');
+    $this->getSession()->getPage()->checkField('Disable Contact 1 to be stored as Primary Participant');
+    $this->saveCiviCRMSettings();
+
+    // Resubmit the form and verify the results.
+    $this->submitWebform();
+    $this->verifyResults(false);
   }
 
   /**
@@ -207,8 +313,7 @@ final class EventTest extends WebformCivicrmTestBase {
     $this->assertSession()->pageTextContains('New submission added to CiviCRM Webform Test.');
 
     //Assert if recur is attached to the created membership.
-    $utils = \Drupal::service('webform_civicrm.utils');
-    $api_result = $utils->wf_civicrm_api('participant', 'get', [
+    $api_result = $this->utils->wf_civicrm_api('participant', 'get', [
       'sequential' => 1,
     ]);
     $this->assertEquals(0, $api_result['is_error']);
@@ -217,9 +322,10 @@ final class EventTest extends WebformCivicrmTestBase {
   }
 
   /**
-   * Test the working of 'Show Full Events'.
+   * Test the working of 'Show Full Events'
+   * and default URL load of events.
    */
-  function testMaxParticipant() {
+  function testMaxParticipantAndEventUrlDefault() {
     $event = $this->utils->wf_civicrm_api('Event', 'create', [
       'event_type_id' => "Conference",
       'title' => "Test Event 2",
@@ -229,7 +335,7 @@ final class EventTest extends WebformCivicrmTestBase {
     ]);
     $this->assertEquals(0, $event['is_error']);
     $this->assertEquals(1, $event['count']);
-    $this->_event2 = reset($event['values']);
+    $event2 = reset($event['values']);
 
     $event = $this->utils->wf_civicrm_api('Event', 'create', [
       'event_type_id' => "Conference",
@@ -239,7 +345,6 @@ final class EventTest extends WebformCivicrmTestBase {
     ]);
     $this->assertEquals(0, $event['is_error']);
     $this->assertEquals(1, $event['count']);
-    $this->_event3 = reset($event['values']);
 
     // Enable waitlist on the event with max participant = 2.
     $this->utils->wf_civicrm_api('Event', 'create', [
@@ -266,7 +371,7 @@ final class EventTest extends WebformCivicrmTestBase {
     // Register only 1 particpant to event 2 so that 1 seat is available.
     $this->utils->wf_civicrm_api('Participant', 'create', [
       'contact_id' => $indiv1,
-      'event_id' => $this->_event2['id'],
+      'event_id' => $event2['id'],
       'status_id' => "Registered",
       'role_id' => "Attendee",
     ]);
@@ -278,7 +383,6 @@ final class EventTest extends WebformCivicrmTestBase {
     ]));
     $this->enableCivicrmOnWebform();
     $this->getSession()->getPage()->selectFieldOption('number_of_contacts', 1);
-    $this->assertSession()->assertWaitOnAjaxRequest();
     $this->htmlOutput();
 
     // Configure Event tab.
@@ -287,6 +391,7 @@ final class EventTest extends WebformCivicrmTestBase {
     $this->assertSession()->assertWaitOnAjaxRequest();
     $this->htmlOutput();
     $this->getSession()->getPage()->selectFieldOption('reg_options[show_remaining]', 'always');
+    $this->getSession()->getPage()->checkField('reg_options[allow_url_load]');
     $this->getSession()->getPage()->selectFieldOption('participant_1_number_of_participant', 1);
     $this->assertSession()->assertWaitOnAjaxRequest();
     $this->htmlOutput();
@@ -318,6 +423,25 @@ final class EventTest extends WebformCivicrmTestBase {
     $this->assertSession()->pageTextNotContains('Test Event 1');
     $this->assertSession()->pageTextContains('Test Event 2');
     $this->assertSession()->pageTextContains('Test Event 3');
+
+    // Ensure URL events are set as default on the event field.
+    $this->drupalGet($this->webform->toUrl('canonical', ['query' => ['event1' => $event2['id']]]));
+    $this->assertSession()->checkboxChecked('Test Event 2');
+
+    // Create new event and load it from the URL.
+    $event = $this->utils->wf_civicrm_api('Event', 'create', [
+      'event_type_id' => "Conference",
+      'title' => "Test Event 4",
+      'start_date' => date('Y-m-d'),
+      'financial_type_id' => $this->ft['id'],
+    ]);
+    $this->assertEquals(0, $event['is_error']);
+    $this->assertEquals(1, $event['count']);
+    $event4 = reset($event['values']);
+
+    $this->drupalGet($this->webform->toUrl('canonical', ['query' => ['event1' => $event4['id']]]));
+    $this->assertSession()->pageTextContains('Test Event 4');
+    $this->assertSession()->checkboxChecked('Test Event 4');
   }
 
 }

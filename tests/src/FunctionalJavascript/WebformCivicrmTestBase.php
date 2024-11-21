@@ -13,6 +13,7 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
 
   use WebformBrowserTestTrait;
   use \Drupal\Tests\mink_civicrm_helpers\Traits\Utils;
+  use \Drupal\Tests\system\Traits\OffCanvasTestTrait;
 
   /**
    * {@inheritdoc}
@@ -23,6 +24,7 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
     'webform_civicrm',
     'token',
     'ckeditor5',
+    'off_canvas_test',
     'mink_civicrm_helpers',
   ];
 
@@ -53,6 +55,16 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
    * @var \Drupal\user\Entity\User
    */
   protected $adminUser;
+
+  /**
+   * @var \Drupal\webform_civicrm\UtilsInterface
+   */
+  protected $utils;
+
+  /**
+   * @var int
+   */
+  protected $rootUserCid;
 
   /**
    * {@inheritdoc}
@@ -88,13 +100,18 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
       'id' => 'civicrm_webform_test',
       'title' => 'CiviCRM Webform Test.' . $CiviCRM_version,
     ]);
-    $this->rootUserCid = $this->createIndividual()['id'];
-    // Create CiviCRM contact for rootUser.
-    $this->utils->wf_civicrm_api('UFMatch', 'create', [
-      'uf_id' => $this->rootUser->id(),
-      'uf_name' => $this->rootUser->getAccountName(),
-      'contact_id' => $this->rootUserCid,
-    ]);
+    if (version_compare(\CRM_Core_BAO_Domain::version(), '5.79.alpha1', '<')) {
+      $this->rootUserCid = $this->createIndividual()['id'];
+      // Create CiviCRM contact for rootUser.
+      $this->utils->wf_civicrm_api('UFMatch', 'create', [
+        'uf_id' => $this->rootUser->id(),
+        'uf_name' => $this->rootUser->getAccountName(),
+        'contact_id' => $this->rootUserCid,
+      ]);
+    }
+    else {
+      $this->rootUserCid = $this->getUFMatchRecord($this->rootUser->id())['contact_id'];
+    }
   }
 
   protected function tearDown(): void {
@@ -119,7 +136,6 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
     $this->getSession()->getPage()->selectFieldOption('outBound_option', 5);
 
     $this->getSession()->getPage()->pressButton('_qf_Smtp_next');
-    $this->assertSession()->assertWaitOnAjaxRequest();
   }
 
   /**
@@ -174,7 +190,7 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
       'tax_rate' => $tax_rate,
       'is_active' => 1,
     ], $accountParams);
-    $account = \CRM_Financial_BAO_FinancialAccount::add($params);
+    $account = \CRM_Financial_BAO_FinancialAccount::writeRecord($params);
     $entityParams = [
       'entity_table' => 'civicrm_financial_type',
       'entity_id' => $financialTypeId,
@@ -233,6 +249,10 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
 
     if (!empty($params['payment_processor_id'])) {
       $this->getSession()->getPage()->selectFieldOption('Payment Processor', $params['payment_processor_id']);
+    }
+    if (!empty($params['soft'])) {
+      $this->getSession()->getPage()->selectFieldOption('Soft Credit To', $params['soft']);
+      $this->getSession()->getPage()->selectFieldOption('Soft Credit Type', $params['soft_credit_type_id']);
     }
 
     if (!empty($params['receipt'])) {
@@ -333,11 +353,13 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
    *  TRUE if only one option is enabled on the element.
    * @param string $asList
    *  TRUE if element need to be rendered as select element.
+   * @param string $secondarySelector
+   *  optional secondary selector
    */
-  protected function editCivicrmOptionElement($selector, $multiple = TRUE, $enableStatic = FALSE, $default = NULL, $type = NULL, $singleOption = FALSE, $asList = FALSE) {
-    $checkbox_edit_button = $this->assertSession()->elementExists('css', '[data-drupal-selector="' . $selector . '"] a.webform-ajax-link');
+  protected function editCivicrmOptionElement($selector, $multiple = TRUE, $enableStatic = FALSE, $default = NULL, $type = NULL, $singleOption = FALSE, $asList = FALSE, $secondarySelector = 'li.edit') {
+    $checkbox_edit_button = $this->assertSession()->elementExists('css', '[data-drupal-selector="' . $selector . '"] ' . ($secondarySelector ? "$secondarySelector " : '') . 'a.webform-ajax-link');
     $checkbox_edit_button->click();
-    $this->assertSession()->waitForField('drupal-off-canvas');
+    $this->waitForOffCanvasArea();
     $this->htmlOutput();
     if ($type) {
       $this->assertSession()->elementExists('css', '[data-drupal-selector="edit-change-type"]')->click();
@@ -423,7 +445,6 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
     $this->htmlOutput();
     $this->getSession()->getPage()->checkField('nid');
     $this->getSession()->getPage()->selectFieldOption('1_contact_type', 'individual');
-    $this->assertSession()->assertWaitOnAjaxRequest();
   }
 
   /**
@@ -504,6 +525,9 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
     if (!empty($params['hide_fields'])) {
       $this->getSession()->getPage()->selectFieldOption('properties[hide_fields][]', $params['hide_fields']);
     }
+    if (!empty($params['hide_method'])) {
+      $this->getSession()->getPage()->selectFieldOption('properties[hide_method]', $params['hide_method']);
+    }
     if (!empty($params['submit_disabled'])) {
       $this->getSession()->getPage()->checkField("properties[submit_disabled]");
     }
@@ -540,6 +564,10 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
       $this->assertSession()->assertWaitOnAjaxRequest();
       $this->getSession()->getPage()->selectFieldOption('Set default contact from', $params['default']);
 
+      if ($params['default'] == 'Specified Contact') {
+        $this->getSession()->getPage()->fillField('default-contact-id', $params['default_contact_id']);
+      }
+
       if ($params['default'] == 'relationship') {
         $this->getSession()->getPage()->selectFieldOption('properties[default_relationship_to]', $params['default_relationship']['default_relationship_to']);
         $this->assertSession()->assertWaitOnAjaxRequest();
@@ -568,6 +596,13 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
       $this->assertSession()->elementExists('css', '[data-drupal-selector="edit-validation"]')->click();
       $this->getSession()->getPage()->checkField('properties[required]');
     }
+
+    // Wait for ajax message from previous click of Save button to no longer be
+    // visible to avoid falling through the following waitForElementVisible
+    // prematurely.
+    do {
+      $ajax_message_visible = $this->assertSession()->waitForElementVisible('css', '.webform-ajax-messages', 100);
+    } while ($ajax_message_visible);
 
     $this->getSession()->getPage()->pressButton('Save');
     $this->assertSession()->waitForElementVisible('css', '.webform-ajax-messages');
@@ -680,7 +715,7 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
     $this->getSession()->getPage()->fillField('City', $params['city']);
 
     $this->getSession()->getPage()->selectFieldOption('Country', $params['country']);
-    $this->assertSession()->assertWaitOnAjaxRequest();
+    $this->getSession()->wait(1000);
     $this->getSession()->getPage()->selectFieldOption('State/Province', $params['state_province']);
 
     $this->getSession()->getPage()->fillField('Postal Code', $params['postal_code']);
@@ -695,7 +730,6 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
   protected function fillCardAndSubmit($billingValues = []) {
     if (!empty($billingValues)) {
       $this->getSession()->getPage()->checkField("civicrm_1_contribution_1_contribution_billing_address_same_as");
-      $this->assertSession()->assertWaitOnAjaxRequest();
       $this->getSession()->wait(1000);
 
       // Verify populated values for billing fields.
@@ -727,7 +761,7 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
     $this->getSession()->getPage()->pressButton('Submit');
     $this->htmlOutput();
     $this->assertPageNoErrorMessages();
-    $this->assertSession()->pageTextContains('New submission added to CiviCRM Webform Test.');
+    $this->assertSession()->waitForText('New submission added to CiviCRM Webform Test.');
   }
 
   /**
@@ -752,18 +786,13 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
     }
 
     // Fill value on the wysiwyg editor.
-    if (version_compare(\Drupal::VERSION, '10', '>=')) {
-      $this->getSession()->executeScript("
-        const element = document.getElementById(\"$fieldId\");
-        const editor = Drupal.CKEditor5Instances.get(
-          element.getAttribute('data-ckeditor5-id'),
-        );
-        editor.setData(\"$value\");
-      ");
-    }
-    else {
-      $this->getSession()->executeScript("CKEDITOR.instances[\"$fieldId\"].setData(\"$value\");");
-    }
+    $this->getSession()->executeScript("
+      const element = document.getElementById(\"$fieldId\");
+      const editor = Drupal.CKEditor5Instances.get(
+        element.getAttribute('data-ckeditor5-id'),
+      );
+      editor.setData(\"$value\");
+    ");
   }
 
   /**
@@ -778,10 +807,8 @@ abstract class WebformCivicrmTestBase extends CiviCrmTestBase {
     }
 
     $this->getSession()->getPage()->selectFieldOption('edit-settings-body', '_other_');
-    $this->assertSession()->assertWaitOnAjaxRequest();
     $this->fillCKEditor('settings[body_custom_html][value]', $params['body']);
     $this->getSession()->getPage()->pressButton('Save');
-    $this->assertSession()->assertWaitOnAjaxRequest();
   }
 
   /**

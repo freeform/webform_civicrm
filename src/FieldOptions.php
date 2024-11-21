@@ -67,7 +67,12 @@ class FieldOptions implements FieldOptionsInterface {
         $ret = $utils->wf_crm_get_tags($ent, wf_crm_aval($split, 1));
       }
       elseif (isset($field['table']) && $field['table'] === 'group') {
-        $ret = $utils->wf_crm_apivalues('group', 'get', ['is_hidden' => 0], 'title');
+        $params = ['is_hidden' => 0];
+        $options = wf_crm_aval($data, "contact:$c:other:1:group");
+        if (!empty($options) && !empty($options['public_groups'])) {
+          $params['visibility'] = "Public Pages";
+        }
+        $ret = $utils->wf_crm_apivalues('group', 'get',  $params, 'title');
       }
       elseif ($name === 'survey_id') {
         $ret = $utils->wf_crm_get_surveys(wf_crm_aval($data, "activity:$c:activity:1", []));
@@ -104,12 +109,17 @@ class FieldOptions implements FieldOptionsInterface {
       else {
         $params = ['field' => $name, 'context' => 'create'];
         // Special case for contribution_recur fields
-        if ($table == 'contribution' && strpos($name, 'frequency_') === 0) {
-          $table = 'contribution_recur';
-        }
-        if ($table == 'contribution' && strpos($name, 'billing_address_') === 0) {
-          $table = 'address';
-          $params['field'] = str_replace('billing_address_', '', $params['field']);
+        if ($table === 'contribution') {
+          if (str_starts_with($name, 'frequency_')) {
+            $table = 'contribution_recur';
+          }
+          elseif ($name === 'soft_credit_type_id') {
+            $table = 'contribution_soft';
+          }
+          elseif (str_starts_with($name, 'billing_address_')) {
+            $table = 'address';
+            $params['field'] = str_replace('billing_address_', '', $params['field']);
+          }
         }
         // Use the Contribution table to pull up financial type id-s
         if ($table == 'membership' && $name == 'financial_type_id') {

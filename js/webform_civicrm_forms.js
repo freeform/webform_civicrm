@@ -164,6 +164,9 @@ var wfCivi = (function (D, $, drupalSettings, once) {
               $(':input[id$="month"]', $wrapper).val(parseInt(date[1], 10)).trigger('change', 'webform_civicrm:autofill');
               $(':input[id$="day"]', $wrapper).val(parseInt(date[2], 10)).trigger('change', 'webform_civicrm:autofill');
             }
+            else {
+              $(':input', this).val('').trigger('change', 'webform_civicrm:reset');;
+            }
           }
           else {
             $(':input', this).not(':radio, :checkbox, :button, :submit, :file, .form-file').each(function() {
@@ -174,7 +177,7 @@ var wfCivi = (function (D, $, drupalSettings, once) {
             });
             $('.civicrm-remove-file', this).click();
             $('input:checkbox, input:radio', this).each(function() {
-              $(this).removeAttr('checked').trigger('change', 'webform_civicrm:reset');
+              $(this).prop('checked', false).trigger('change', 'webform_civicrm:reset');
             });
           }
         }
@@ -325,20 +328,21 @@ var wfCivi = (function (D, $, drupalSettings, once) {
   }
 
   function fillOptions(element, data) {
+    var sortedData = Object.entries(data).sort(([,a],[,b]) => a > b);
     var $el = $(element),
       value = $el.attr('data-val') ? $el.attr('data-val') : $el.val();
     $el.find('option').remove();
-    if (!$.isEmptyObject(data || [])) {
+    if (!sortedData.length == 0) {
       if (!data['']) {
         var text = $el.hasClass('required') ? Drupal.t('- Select -') : Drupal.t('- None -');
         $el.append('<option value="">'+text+'</option>');
       }
-      $.each(data, function(key, val) {
-        $el.append('<option value="'+key+'">'+val+'</option>');
-      });
-      if (value in data) {
-        $el.val(value);
-      }
+      for (let i = 0; i < sortedData.length; i++) {
+        $el.append('<option value="'+sortedData[i][0]+'">'+sortedData[i][1]+'</option>');
+        if (sortedData[i][0] == value) {
+          $el.val(value);
+        }
+      };
     }
     else {
       $el.append('<option value="-">'+Drupal.t('- N/A -')+'</option>');
@@ -348,7 +352,7 @@ var wfCivi = (function (D, $, drupalSettings, once) {
 
   function sharedAddress(item, action, speed) {
     var name = parseName($(item).attr('name'));
-    var fields = $(item).parents('form.webform-submission-form').find('[name*="'+(name.replace(/master_id.*$/, ''))+'"').not('[name*=location_type_id]').not('[name*=master_id]').not('[type="hidden"]');
+    var fields = $(item).parents('form.webform-submission-form').find('[name*="'+(name.replace(/master_id.*$/, ''))+'"]').not('[name*=location_type_id]').not('[name*=master_id]').not('[type="hidden"]');
     if (action === 'hide') {
       fields.parent().hide(speed, function() {$(this).css('display', 'none');});
       fields.prop('disabled', true);
